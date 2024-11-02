@@ -1,5 +1,5 @@
 import requests
-
+import json
 from config import API_KEY, BASE_URL
 
 session_id = ""
@@ -46,7 +46,7 @@ def end_session():
 
             # returneaza True daca a inschis sesiunea cu succes
             # si text-ul de la response
-            return True
+            return response.text
             
         else:
             # daca response da faild, returnam False cu raspunsul
@@ -83,3 +83,15 @@ def play_round(data, session): # data = informatiile pe care la dam ca answer
     except requests.exceptions.RequestException as e:
         # In cazul unei erori a functii request returnam False si mesajul de eroare
         return False, e
+    
+
+session_id = start_session()
+print(session_id)
+
+for i in range(42):
+    with open(f'day_{i}.json', 'r') as f:
+        day_data = json.load(f)  # Load the JSON data as a dictionary
+
+        play_round(day_data, session_id)
+
+print(end_session())
