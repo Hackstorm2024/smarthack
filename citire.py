@@ -10,9 +10,3 @@ def citire_date():
     teams_df = pd.read_csv('teams.csv', delimiter=';')
     
     return raf_df, conn_df, customers_df, demands_df, tanks_df, teams_df
-
-
-raf_df, conn_df, customers_df, demands_df, tanks_df, teams_df = citire_date()
-
-
-print(teams_df.head(3))
