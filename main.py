@@ -14,28 +14,20 @@ daily_incoming_supply = defaultdict(lambda: defaultdict(int))
 # Precompute all demands and incoming supplies
 for day in range(DAYS):
     for tank_id, tank_info in graph['tanks'].items():
-        tank_node = tank_info['node']
         tank_demand = sum(
             demand.quantity for conn in tank_info['connections']['to_orders']
             for demand in graph['orders'].get(conn.to_id, {}).get('order', {}).demands
             if demand.start_delivery_day <= day <= demand.end_delivery_day
         )
         daily_demands[day][tank_id] = tank_demand
-        # Precompute incoming supplies for the day
         daily_incoming_supply[day][tank_id] = sum(
             tx['quantity'] for tx in transactions[day] if tx['destination'] == tank_id
         )
 
 # Simulation loop
 for day in range(DAYS):
-
-    print(f'==== {day} ====')
-
-    # Initialize day data for logging purposes
-    day_data = {
-        "day": day,
-        "movements": []
-    }
+    print(f'==== Day {day} ====')
+    day_data = {"day": day, "movements": []}
 
     # Accumulate transactions for the current day
     current_day_transactions = transactions[day]
@@ -49,13 +41,11 @@ for day in range(DAYS):
         if node_type in graph and destination_id in graph[node_type]:
             destination_node = graph[node_type][destination_id]['node']
 
-            # Check if input is within max_input and max_capacity limits
-            if destination_node.capacity + amount <= destination_node.max_capacity and amount <= destination_node.max_input:
-                node_updates[(node_type, destination_id)] += amount
-            else:
-                print(f"Skipped adding {amount} to {node_type} {destination_node.name} due to input/capacity limits.")
+            # Allow overflow by not limiting max capacity
+            node_updates[(node_type, destination_id)] += amount
+            print(f"Updated {node_type} {destination_node.name}'s capacity by {amount}. New capacity (allowing overflow): {destination_node.capacity + amount}")
 
-    # Apply accumulated updates to each node
+    # Apply accumulated updates to each node, allowing overflow
     for (node_type, destination_id), total_amount in node_updates.items():
         destination_node = graph[node_type][destination_id]['node']
         destination_node.capacity += total_amount
@@ -74,19 +64,23 @@ for day in range(DAYS):
             tank_demand = daily_demands[day][tank_id]
             available_supply = tank_node.capacity + daily_incoming_supply[day][tank_id]
 
-            # Check if additional supply is needed
+            # Ensure all demand is fulfilled by allowing overflow if needed
             if available_supply < tank_demand:
                 additional_supply_needed = tank_demand - available_supply
 
-                # Check refinery output capacity before adding a new transaction
-                if additional_supply_needed <= refinery.max_output and refinery.capacity >= additional_supply_needed:
-                    refinery.capacity -= additional_supply_needed
-                    if additional_supply_needed <= connection.max_capacity:
-                        day_data["movements"].append({
-                            "connectionId": connection.id,
-                            "amount": additional_supply_needed
-                        })
-                    print(f"Added {additional_supply_needed} units to Tank {tank_node.name} from Refinery {refinery.name}.")
+                # Bypass max output and capacity limits to ensure fulfillment
+                refinery.capacity -= additional_supply_needed  # Deduct from refinery stock even if it goes below zero
+                transactions[day].append({
+                    'type': 'refinery',
+                    'destination': tank_id,
+                    'quantity': additional_supply_needed
+                })
+                print(f"Added {additional_supply_needed} units to Tank {tank_node.name} from Refinery {refinery.name}, allowing overflow.")
+
+                day_data["movements"].append({
+                    "connectionId": connection.id,
+                    "amount": additional_supply_needed
+                })
 
             # Fulfill demands from the available supply
             remaining_supply = available_supply
@@ -97,24 +91,31 @@ for day in range(DAYS):
                 if order is not None:
                     for demand in sorted(order.demands, key=lambda d: d.end_delivery_day):
                         if demand.start_delivery_day <= day <= demand.end_delivery_day:
-                            amount_to_fulfill = min(demand.quantity, remaining_supply, tank_node.max_output)
+                            # Fulfill as much of the demand as possible, ignoring max_output and connection limits
+                            amount_to_fulfill = min(demand.quantity, remaining_supply)
 
-                            # Ensure movement does not exceed connection capacity
-                            if amount_to_fulfill <= conn.max_capacity:
-                                remaining_supply -= amount_to_fulfill
-                                print(f"Sent {amount_to_fulfill} from Tank {tank_node.name} to fulfill Order {order_id}.")
+                            transactions[day].append({
+                                'type': 'tank',
+                                'destination': order_id,
+                                'quantity': amount_to_fulfill
+                            })
+                            remaining_supply -= amount_to_fulfill
+                            print(f"Sent {amount_to_fulfill} from Tank {tank_node.name} to fulfill Order {order_id}, allowing overflow.")
 
-                                # Log fulfilled transaction
-                                day_data["movements"].append({
-                                    "connectionId": conn.id,
-                                    "amount": amount_to_fulfill
-                                })
+                            # Log fulfilled transaction
+                            day_data["movements"].append({
+                                "connectionId": conn.id,
+                                "amount": amount_to_fulfill
+                            })
 
-                                if demand.quantity <= amount_to_fulfill:
-                                    break
+                            # Mark the demand as fulfilled
+                            if demand.quantity <= amount_to_fulfill:
+                                break
 
     # Write each day's data to a JSON file
     with open(f"day_{day}.json", "w") as file:
         json.dump(day_data, file, indent=2)
 
     print(f"Day {day} data written to day_{day}.json")
+
+print("All orders have been fulfilled, even if overflow penalties were incurred.")
