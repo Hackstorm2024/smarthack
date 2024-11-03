@@ -1,99 +1,121 @@
-import requests
 import json
-from config import API_KEY, BASE_URL
+from collections import defaultdict
+from clase import create_clase
 
-session_id = ""
+# Initialize simulation parameters
+DAYS = 43  # Run from day 0 to day 42
+graph = create_clase()  # Load the network graph structure
+transactions = defaultdict(list)  # To store transactions for each day
 
-# porneste o sesiune si returneasa id-ul sesiuni
-def start_session():
-    headers = {
-        'API-KEY': API_KEY,
-        "accept": "*/*"
-    }
+# Precompute daily demands and incoming supplies for each tank
+daily_demands = defaultdict(lambda: defaultdict(int))
+daily_incoming_supply = defaultdict(lambda: defaultdict(int))
 
-    try:
-        # face request-ul catre server si memoreaza raspunsu-l
-        # in variabila response
-        response = requests.post(BASE_URL+"session/start", headers=headers)
+# Precompute all demands and incoming supplies
+for day in range(DAYS):
+    for tank_id, tank_info in graph['tanks'].items():
+        tank_demand = sum(
+            demand.quantity for conn in tank_info['connections']['to_orders']
+            for demand in graph['orders'].get(conn.to_id, {}).get('order', {}).demands
+            if demand.start_delivery_day <= day <= demand.end_delivery_day
+        )
+        daily_demands[day][tank_id] = tank_demand
+        daily_incoming_supply[day][tank_id] = sum(
+            tx['quantity'] for tx in transactions[day] if tx['destination'] == tank_id
+        )
 
-        # verifica daca a create o sesiune cu succes
-        if response.status_code == 200:
-            return response.text.strip() # returneaza id-ul de sesiunea
-        
-        else:
-            # daca response da faild, returnam False cu raspunsul
-            return False, response.status_code, response.text
-        
-    except requests.exceptions.RequestException as e:
-        # In cazul unei erori a functii request returnam False si mesajul de eroare
-        return False, str(e)
+# Simulation loop
+for day in range(DAYS):
+    print(f'==== Day {day} ====')
+    day_data = {"day": day, "movements": []}
 
+    # Accumulate transactions for the current day
+    current_day_transactions = transactions[day]
+    node_updates = defaultdict(int)  # Accumulate capacity updates per node
 
-# inchide o sesiune
-def end_session(): 
-    headers = {
-        'API-KEY': API_KEY,
-        "accept": "*/*"
-    }
+    for transaction in current_day_transactions:
+        node_type = transaction['type']
+        destination_id = transaction['destination']
+        amount = transaction['quantity']
 
-    try:
-        # face request-ul catre server si memoreaza raspunsu-l
-        # in variabila response
-        response = requests.post(BASE_URL+"session/end", headers=headers)
+        if node_type in graph and destination_id in graph[node_type]:
+            destination_node = graph[node_type][destination_id]['node']
 
-        # verifica daca a inchis sesiunea cu succes 
-        if response.status_code == 200:
-            print("YES!")
-            # returneaza True daca a inschis sesiunea cu succes
-            # si text-ul de la response
-            return response.text
-            
-        else:
-            
-            # daca response da faild, returnam False cu raspunsul
-            return response.status_code, response.text
-        
-    except requests.exceptions.RequestException as e:
-        print("DEFAP!")
-        # In cazul unei erori a functii request returnam False si mesajul de eroare
-        return False
+            # Allow overflow by not limiting max capacity
+            node_updates[(node_type, destination_id)] += amount
+            print(f"Updated {node_type} {destination_node.name}'s capacity by {amount}. New capacity (allowing overflow): {destination_node.capacity + amount}")
 
-def play_round(data, session): # data = informatiile pe care la dam ca answer
+    # Apply accumulated updates to each node, allowing overflow
+    for (node_type, destination_id), total_amount in node_updates.items():
+        destination_node = graph[node_type][destination_id]['node']
+        destination_node.capacity += total_amount
+        print(f"Updated {node_type} {destination_node.name}'s capacity by {total_amount}. New capacity: {destination_node.capacity}")
 
-    headers = {
-        'API-KEY': API_KEY,
-        'SESSION-ID': session
-    }
+    # Process each refinery and connected tanks
+    for refinery_id, refinery_info in graph['refineries'].items():
+        refinery = refinery_info['node']
 
-    try:
-        # face request-ul catre server si memoreaza raspunsu-l
-        # in variabila response
-        response = requests.post(BASE_URL+"play/round", headers=headers, json=data)
+        for connection in refinery_info['connections']:
+            tank_id = connection.to_id
+            tank_info = graph['tanks'][tank_id]
+            tank_node = tank_info['node']
 
-        # verifica daca a inchis sesiunea cu succes 
-        if response.status_code == 200:
+            # Retrieve precomputed demand and incoming supply
+            tank_demand = daily_demands[day][tank_id]
+            available_supply = tank_node.capacity + daily_incoming_supply[day][tank_id]
 
-            # returneaza True daca a inschis sesiunea cu succes
-            # si text-ul de la response
-            return response.json()  # Successful response
+            # Ensure all demand is fulfilled by allowing overflow if needed
+            if available_supply < tank_demand:
+                additional_supply_needed = tank_demand - available_supply
 
-            
-        else:
-            return False, response.json()
-           
-    except requests.exceptions.RequestException as e:
-        # In cazul unei erori a functii request returnam False si mesajul de eroare
-        return False, e
-    
+                # Bypass max output and capacity limits to ensure fulfillment
+                refinery.capacity -= additional_supply_needed  # Deduct from refinery stock even if it goes below zero
+                transactions[day].append({
+                    'type': 'refinery',
+                    'destination': tank_id,
+                    'quantity': additional_supply_needed
+                })
+                print(f"Added {additional_supply_needed} units to Tank {tank_node.name} from Refinery {refinery.name}, allowing overflow.")
 
-session_id = start_session()
-print(session_id)
+                day_data["movements"].append({
+                    "connectionId": connection.id,
+                    "amount": additional_supply_needed
+                })
 
-for i in range(42):
-    with open(f'day_{i}.json', 'r') as f:
-        day_data = json.load(f)  # Load the JSON data as a dictionary
+            # Fulfill demands from the available supply
+            remaining_supply = available_supply
+            for conn in tank_info['connections']['to_orders']:
+                order_id = conn.to_id
+                order = graph['orders'].get(order_id, {}).get('order')
 
-        print(play_round(day_data, session_id))
-        print('tried for ',i)
+                if order is not None:
+                    for demand in sorted(order.demands, key=lambda d: d.end_delivery_day):
+                        if demand.start_delivery_day <= day <= demand.end_delivery_day:
+                            # Fulfill as much of the demand as possible, ignoring max_output and connection limits
+                            amount_to_fulfill = min(demand.quantity, remaining_supply)
 
-print(end_session())
+                            transactions[day].append({
+                                'type': 'tank',
+                                'destination': order_id,
+                                'quantity': amount_to_fulfill
+                            })
+                            remaining_supply -= amount_to_fulfill
+                            print(f"Sent {amount_to_fulfill} from Tank {tank_node.name} to fulfill Order {order_id}, allowing overflow.")
+
+                            # Log fulfilled transaction
+                            day_data["movements"].append({
+                                "connectionId": conn.id,
+                                "amount": amount_to_fulfill
+                            })
+
+                            # Mark the demand as fulfilled
+                            if demand.quantity <= amount_to_fulfill:
+                                break
+
+    # Write each day's data to a JSON file
+    with open(f"day_{day}.json", "w") as file:
+        json.dump(day_data, file, indent=2)
+
+    print(f"Day {day} data written to day_{day}.json")
+
+print("All orders have been fulfilled, even if overflow penalties were incurred.")
