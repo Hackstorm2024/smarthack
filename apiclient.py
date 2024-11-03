@@ -5,16 +5,16 @@ from config import API_KEY, BASE_URL
 session_id = ""
 
 # porneste o sesiune si returneasa id-ul sesiuni
-def start_session():
+def start_session(api_key, base_url):
     headers = {
-        'API-KEY': API_KEY,
+        'API-KEY': api_key,
         "accept": "*/*"
     }
 
     try:
         # face request-ul catre server si memoreaza raspunsu-l
         # in variabila response
-        response = requests.post(BASE_URL+"session/start", headers=headers)
+        response = requests.post(base_url+"session/start", headers=headers)
 
         # verifica daca a create o sesiune cu succes
         if response.status_code == 200:
@@ -30,68 +30,63 @@ def start_session():
 
 
 # inchide o sesiune
-def end_session(): 
+def end_session(api_key, base_url): 
     headers = {
-        'API-KEY': API_KEY,
+        'API-KEY': api_key,
         "accept": "*/*"
     }
 
     try:
         # face request-ul catre server si memoreaza raspunsu-l
         # in variabila response
-        response = requests.post(BASE_URL+"session/end", headers=headers)
+        response = requests.post(base_url+"session/end", headers=headers)
 
         # verifica daca a inchis sesiunea cu succes 
         if response.status_code == 200:
-
+            print("YES!")
             # returneaza True daca a inschis sesiunea cu succes
             # si text-ul de la response
             return response.text
             
         else:
+            
             # daca response da faild, returnam False cu raspunsul
-            return False
+            return response.status_code, response.text
         
     except requests.exceptions.RequestException as e:
+        print("DEFAP!")
         # In cazul unei erori a functii request returnam False si mesajul de eroare
         return False
 
-def play_round(data, session): # data = informatiile pe care la dam ca answer
-
+def play_round(data, session, base_url, api_key):
     headers = {
-        'API-KEY': API_KEY,
+        'API-KEY': api_key,
         'SESSION-ID': session
     }
 
     try:
-        # face request-ul catre server si memoreaza raspunsu-l
-        # in variabila response
-        response = requests.post(BASE_URL+"play/round", headers=headers, json=data)
+        response = requests.post(base_url + "play/round", headers=headers, json=data)
 
-        # verifica daca a inchis sesiunea cu succes 
         if response.status_code == 200:
-
-            # returneaza True daca a inschis sesiunea cu succes
-            # si text-ul de la response
-            return response.json()  # Successful response
-
-            
+            return response.json().get('demand', [])  # Ensure it returns a list or empty list
         else:
-            
-            return False, response.json()
-           
+            print(f"Error in play_round: {response.status_code} - {response.text}")
+            return []  # Return an empty list in case of an error
+
     except requests.exceptions.RequestException as e:
-        # In cazul unei erori a functii request returnam False si mesajul de eroare
-        return False, e
+        print(f"Request exception in play_round: {e}")
+        return []  # Return an empty list if there’s an exception
+
     
 
-session_id = start_session()
-print(session_id)
+# session_id = start_session()
+# print(session_id)
 
-for i in range(42):
-    with open(f'day_{i}.json', 'r') as f:
-        day_data = json.load(f)  # Load the JSON data as a dictionary
+# for i in range(42):
+#     with open(f'day_{i}.json', 'r') as f:
+#         day_data = json.load(f)  # Load the JSON data as a dictionary
 
-        play_round(day_data, session_id)
+#         print(play_round(day_data, session_id))
+#         print('tried for ',i)
 
-print(end_session())
+# print(end_session())
