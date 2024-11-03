@@ -1,10 +1,15 @@
 import json
 from collections import defaultdict
 from clase import create_clase
+from config import BASE_URL, API_KEY
+from apiclient import start_session, play_round, end_session
+from helper import transform_and_append_demands
+
+session_id = start_session(API_KEY, BASE_URL)
 
 # Initialize simulation parameters
-DAYS = 43  # Run from day 0 to day 42
-graph = create_clase()  # Load the network graph structure
+DAYS = 42  # Run from day 0 to day 42
+graph = create_clase()  # Load the network graph structure if it’s static
 transactions = defaultdict(list)  # To store transactions for each day
 
 # Precompute daily demands and incoming supplies for each tank
@@ -28,6 +33,8 @@ for day in range(DAYS):
 for day in range(DAYS):
     print(f'==== Day {day} ====')
     day_data = {"day": day, "movements": []}
+
+    graph = create_clase()
 
     # Accumulate transactions for the current day
     current_day_transactions = transactions[day]
@@ -69,7 +76,7 @@ for day in range(DAYS):
                 additional_supply_needed = tank_demand - available_supply
 
                 # Bypass max output and capacity limits to ensure fulfillment
-                refinery.capacity -= additional_supply_needed  # Deduct from refinery stock even if it goes below zero
+                refinery.capacity -= additional_supply_needed
                 transactions[day].append({
                     'type': 'refinery',
                     'destination': tank_id,
@@ -91,7 +98,6 @@ for day in range(DAYS):
                 if order is not None:
                     for demand in sorted(order.demands, key=lambda d: d.end_delivery_day):
                         if demand.start_delivery_day <= day <= demand.end_delivery_day:
-                            # Fulfill as much of the demand as possible, ignoring max_output and connection limits
                             amount_to_fulfill = min(demand.quantity, remaining_supply)
 
                             transactions[day].append({
@@ -108,7 +114,6 @@ for day in range(DAYS):
                                 "amount": amount_to_fulfill
                             })
 
-                            # Mark the demand as fulfilled
                             if demand.quantity <= amount_to_fulfill:
                                 break
 
@@ -116,6 +121,12 @@ for day in range(DAYS):
     with open(f"day_{day}.json", "w") as file:
         json.dump(day_data, file, indent=2)
 
+    with open(f"day_{day}.json", "r") as f:
+        day_data = json.load(f)  # Load the JSON data as a dictionary
+        demands = play_round(day_data, session_id, BASE_URL, API_KEY)
+        transform_and_append_demands(demands)
+
     print(f"Day {day} data written to day_{day}.json")
 
-print("All orders have been fulfilled, even if overflow penalties were incurred.")
+# End session
+print(end_session(API_KEY, BASE_URL))
